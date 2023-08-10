@@ -2381,32 +2381,6 @@ namespace {
         hasMemberwiseInitializer = false;
       }
 
-      if (hasZeroInitializableStorage &&
-          !(cxxRecordDecl && cxxRecordDecl->hasDefaultConstructor())) {
-        // Add default constructor for the struct if compiling in C mode.
-        // If we're compiling for C++:
-        // 1. If a default constructor is declared, don't synthesize one.
-        // 2. If a default constructor is deleted, don't try to synthesize one.
-        // 3. If there is no default constructor, synthesize a C-like default
-        //    constructor that zero-initializes the backing memory of the
-        //    struct. This is important to maintain source compatibility when a
-        //    client enables C++ interop in an existing project that uses C
-        //    interop and might rely on the fact that C structs have a default
-        //    constructor available in Swift.
-        ConstructorDecl *defaultCtor =
-            synthesizer.createDefaultConstructor(result);
-        ctors.push_back(defaultCtor);
-        if (cxxRecordDecl) {
-          auto attr = AvailableAttr::createPlatformAgnostic(
-              defaultCtor->getASTContext(),
-              "This zero-initializes the backing memory of the struct, which "
-              "is unsafe for some C++ structs. Consider adding an explicit "
-              "default initializer for this C++ struct.",
-              "", PlatformAgnosticAvailabilityKind::Deprecated);
-          defaultCtor->getAttrs().add(attr);
-        }
-      }
-
       bool forceMemberwiseInitializer = false;
       if (cxxRecordDecl && cxxRecordDecl->isInStdNamespace() &&
           cxxRecordDecl->getIdentifier() &&
@@ -2435,6 +2409,42 @@ namespace {
           valueCtor->setIsMemberwiseInitializer();
 
         ctors.push_back(valueCtor);
+      }
+
+      // Add default constructor for the struct if compiling in C mode.
+      // If we're compiling for C++:
+      // 1. If a default constructor is declared, don't synthesize one.
+      // 2. If a default constructor is deleted, don't try to synthesize one.
+      // 3. If there is no default constructor, synthesize a C-like default
+      //    constructor that zero-initializes the backing memory of the
+      //    struct. This is important to maintain source compatibility when a
+      //    client enables C++ interop in an existing project that uses C
+      //    interop and might rely on the fact that C structs have a default
+      //    constructor available in Swift.
+      bool needsEmptyInitializer = true;
+      if (cxxRecordDecl) {
+        if (auto structResult = dyn_cast<StructDecl>(result)) {
+          for (auto constructorDecl : ctors) {
+            if (constructorDecl->getParameters()->size() == 0) {
+              needsEmptyInitializer = false;
+              break;
+            }
+          }
+        }
+      }
+      if (hasZeroInitializableStorage && needsEmptyInitializer) {
+        ConstructorDecl *defaultCtor =
+            synthesizer.createDefaultConstructor(result);
+        ctors.insert(ctors.begin(), defaultCtor);
+        if (cxxRecordDecl) {
+          auto attr = AvailableAttr::createPlatformAgnostic(
+              defaultCtor->getASTContext(),
+              "This zero-initializes the backing memory of the struct, which "
+              "is unsafe for some C++ structs. Consider adding an explicit "
+              "default initializer for this C++ struct.",
+              "", PlatformAgnosticAvailabilityKind::Deprecated);
+          defaultCtor->getAttrs().add(attr);
+        }
       }
 
       // Do not allow Swift to construct foreign reference types (at least, not
